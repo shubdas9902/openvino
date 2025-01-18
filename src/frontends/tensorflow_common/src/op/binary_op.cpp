@@ -198,6 +198,50 @@ OutputVector translate_sub_op(const NodeContext& node) {
     return {result};
 }
 
+template <>
+OutputVector translate_binary_op<v1::Equal>(const NodeContext& node) {
+    default_op_checks(node, 2, {"Equal"}, true);
+    auto lhs = node.get_input(0);
+    auto rhs = node.get_input(1);
+
+    auto complex_type_mark_lhs = as_type_ptr<ComplexTypeMark>(lhs.get_node_shared_ptr());
+    auto complex_type_mark_rhs = as_type_ptr<ComplexTypeMark>(rhs.get_node_shared_ptr());
+
+    // Check if inputs are complex tensors
+    if (complex_type_mark_lhs || complex_type_mark_rhs) {
+        FRONT_END_GENERAL_CHECK(complex_type_mark_lhs && complex_type_mark_rhs,
+                                "Equal operation received a mix of complex and non-complex inputs.");
+        
+        lhs = complex_type_mark_lhs->input_value(0);
+        rhs = complex_type_mark_rhs->input_value(0);
+
+        auto gather_index_real = make_shared<v0::Constant>(element::i32, Shape{}, 0);
+        auto gather_index_imag = make_shared<v0::Constant>(element::i32, Shape{}, 1);
+
+        // Extract real and imaginary parts
+        auto lhs_real = make_shared<v8::Gather>(lhs, gather_index_real, make_shared<v0::Constant>(element::i32, Shape{}, -1));
+        auto lhs_imag = make_shared<v8::Gather>(lhs, gather_index_imag, make_shared<v0::Constant>(element::i32, Shape{}, -1));
+        auto rhs_real = make_shared<v8::Gather>(rhs, gather_index_real, make_shared<v0::Constant>(element::i32, Shape{}, -1));
+        auto rhs_imag = make_shared<v8::Gather>(rhs, gather_index_imag, make_shared<v0::Constant>(element::i32, Shape{}, -1));
+
+        // Compare real and imaginary parts separately
+        auto real_equal = make_shared<v1::Equal>(lhs_real, rhs_real);
+        auto imag_equal = make_shared<v1::Equal>(lhs_imag, rhs_imag);
+
+        // Combine results using logical AND
+        auto result = make_shared<v1::LogicalAnd>(real_equal, imag_equal);
+        set_node_name(node.get_name(), result);
+        return {result};
+    }
+
+    // Fallback for non-complex tensors
+    auto result = make_shared<v1::Equal>(lhs, rhs);
+    set_node_name(node.get_name(), result);
+    return {result};
+}
+
+
+
 template OutputVector translate_binary_op<v1::Add>(const NodeContext& node);
 template OutputVector translate_binary_op<v13::BitwiseAnd>(const NodeContext& node);
 template OutputVector translate_binary_op<v13::BitwiseOr>(const NodeContext& node);
